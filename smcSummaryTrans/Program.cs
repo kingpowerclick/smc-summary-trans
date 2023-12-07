@@ -5,6 +5,7 @@ using System.Net.Mail;
 using System.Data;
 using System.Data.SqlClient;
 using System.Configuration;
+using System.Threading;
 
 namespace smcSummaryTrans
 {
@@ -18,6 +19,7 @@ namespace smcSummaryTrans
             string subject = "[Auto mail]["+ DateTime.Now.ToString("dd/MM/yyyy") +"] Daily summary data for reconcile SMC and Mulesoft"; 
             string bodyMail = "<h3>Daily summary data for reconcile SMC and Mulesoft</h3><br>";
             bool isBodyHtml = true;
+
             List<string> pdf = new List<string>();
 
             string sqlQuery;
@@ -27,25 +29,25 @@ namespace smcSummaryTrans
             // SMC Account Sync
             bodyMail += "<p>SMC Account Sync</p>";
             sqlQuery = "SELECT [Date] ,[Total] ,[Success] ,[Fail] FROM [Newmember].[dbo].[v_member_sum_triggerToMulesoft_all];";
-            resultDataTable = sqlQueryExecutor.QueryDataWithTransaction(sqlQuery);
+            resultDataTable = sqlQueryExecutor.ExecuteQueryWithRetry(sqlQuery);
             bodyMail += ConvertDataTableToHtml(resultDataTable);
 
             // New Registration
             bodyMail += "<br><p>New Registration</p>";
             sqlQuery = "SELECT [Date] ,[Total] ,[Success] ,[Fail] FROM [Newmember].[dbo].[v_member_sum_triggerToMulesoft_insert];";
-            resultDataTable = sqlQueryExecutor.QueryDataWithTransaction(sqlQuery);
+            resultDataTable = sqlQueryExecutor.ExecuteQueryWithRetry(sqlQuery);
             bodyMail += ConvertDataTableToHtml(resultDataTable);
 
             // lv and spend
             bodyMail += "<br><p>LV transaction</p>";
             sqlQuery = "SELECT [Date],[Total] FROM [Newmember].[dbo].[v_member_sum_lvSpendTrans_all];";
-            resultDataTable = sqlQueryExecutor.QueryDataWithTransaction(sqlQuery);
+            resultDataTable = sqlQueryExecutor.ExecuteQueryWithRetry(sqlQuery);
             bodyMail += ConvertDataTableToHtml(resultDataTable);
 
             // Co-brand
             bodyMail += "<br><p>Co-Brand</p>";
             sqlQuery = "SELECT [Date],[Total],[KBankClose] FROM [Newmember].[dbo].[v_member_sum_cobrandTrans_all];";
-            resultDataTable = sqlQueryExecutor.QueryDataWithTransaction(sqlQuery);
+            resultDataTable = sqlQueryExecutor.ExecuteQueryWithRetry(sqlQuery);
             bodyMail += ConvertDataTableToHtml(resultDataTable);
 
             // send email
@@ -109,7 +111,6 @@ namespace smcSummaryTrans
                         attachment = new System.Net.Mail.Attachment(att);//("c:/textfile.txt");
                         mail.Attachments.Add(attachment);
                     }
-
                 }
                 SmtpServer.Send(mail);
             }
@@ -173,5 +174,52 @@ namespace smcSummaryTrans
 
             return resultDataTable;
         }
+
+        public DataTable ExecuteQueryWithRetry(string sqlCommandText)
+        {
+            int maxRetries = int.Parse(ConfigurationManager.AppSettings["max_retry"].ToString());
+            int retryCount = 0;
+
+            while (retryCount < maxRetries)
+            {
+                try
+                {
+                    using (SqlConnection connection = new SqlConnection(connectionString))
+                    {
+                        connection.Open();
+
+                        using (SqlCommand command = new SqlCommand(sqlCommandText, connection))
+                        {
+
+                            // Create a DataTable to hold the results
+                            DataTable resultTable = new DataTable();
+
+                            // Use a DataAdapter to fill the DataTable
+                            using (SqlDataAdapter adapter = new SqlDataAdapter(command))
+                            {
+                                adapter.Fill(resultTable);
+                            }
+
+                            return resultTable; // Query successful, return the DataTable
+                        }
+                    }
+                }
+                catch (SqlException ex)
+                {
+                    // Handle the exception, you might want to log it or perform some specific actions
+                    Console.WriteLine($"Error: {ex.Message}");
+
+                    // Increment the retry count
+                    retryCount++;
+
+                    // Wait for a short period before the next retry (optional)
+                    Thread.Sleep(1000);
+                }
+            }
+
+            return null; // Unable to execute the query after maximum retries
+        }
+
+
     }
 }
